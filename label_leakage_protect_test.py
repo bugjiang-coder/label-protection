@@ -223,7 +223,7 @@ def main(writer=None):
 
     # 保护方法1 iso 高斯白噪声
     # t 表示高斯噪声的强度
-    splitnn = ISO_SplitNN(clients, optimizers, t=0.005)
+    splitnn = ISO_SplitNN(clients, optimizers, t=0)
 
     # 保护方法2 max_norm
     # splitnn = MAX_NORM_SplitNN(clients, optimizers)
@@ -238,10 +238,11 @@ def main(writer=None):
     splitnn.train()
     # 注：这里test时只记录了norm方法测试出的泄露auc
     for epoch in range(128):
+        epoch_loss = 0
         epoch_labels = []
         epoch_g_norm = []
         epoch_outputs = []
-        for i, data in enumerate(train_loader, 0):
+        for i, data in enumerate(train_loader):
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
@@ -272,12 +273,15 @@ def main(writer=None):
             epoch_labels.append(labels)
             epoch_g_norm.append(g_norm)
             epoch_outputs.append(outputs)
+            
+            for opt in optimizers:
+                opt.step()
 
         epoch_labels = torch.cat(epoch_labels)
         epoch_g_norm = torch.cat(epoch_g_norm)
 
         leak_auc = roc_auc_score(epoch_labels, epoch_g_norm.view(-1, 1))
-        auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
+        auc = torch_auc(epoch_labels, torch.cat(epoch_outputs))
 
         if writer:
             writer.add_scalar(
@@ -287,19 +291,22 @@ def main(writer=None):
                 "leak_auc", scalar_value=leak_auc, global_step=epoch)
 
         # 下面是添加了测试数据上auc
-        for i, data in enumerate(test_loader):
+        test_epoch_outputs = []
+        test_epoch_labels = []
+        for i, data in enumerate(test_loader):            
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
             outputs = splitnn(inputs)
 
-            epoch_outputs.append(outputs)
-            epoch_labels.append(labels)
-        test_auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
+            test_epoch_outputs.append(outputs)
+            test_epoch_labels.append(labels)
+        test_auc = torch_auc(torch.cat(test_epoch_labels), torch.cat(test_epoch_outputs))
 
         if writer:
             writer.add_scalar(
                 "test_auc", scalar_value=test_auc, global_step=epoch)
+        print(f"epoch={epoch}, loss: {epoch_loss}, auc: {auc}, test_auc:{test_auc}, leak_auc: {leak_auc}")
 
     # 注意每次attack也是一次训练!
     # 攻击1：模攻击
@@ -318,6 +325,6 @@ def main(writer=None):
 
 
 if __name__ == "__main__":
-    writer = SummaryWriter("iso-protect")
+    writer = SummaryWriter("iso-protect2")
     main(writer)
     writer.close()
