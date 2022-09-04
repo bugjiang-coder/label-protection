@@ -270,15 +270,17 @@ def main(writer=None):
             writer.add_scalar("auc", scalar_value=auc, global_step=epoch)
 
         # 下面是添加了测试数据上auc
+        test_epoch_outputs = []
+        test_epoch_labels = []
         for i, data in enumerate(test_loader):
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
             outputs = splitnn(inputs)
 
-            epoch_outputs.append(outputs)
-            epoch_labels.append(labels)
-        test_auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
+            test_epoch_outputs.append(outputs)
+            test_epoch_labels.append(labels)
+        test_auc = torch_auc(torch.cat(test_epoch_labels), torch.cat(test_epoch_outputs))
 
         if writer:
             writer.add_scalar(
@@ -299,6 +301,6 @@ def main(writer=None):
 
 
 if __name__ == "__main__":
-    writer = SummaryWriter("efficiency2")
+    writer = SummaryWriter("efficiency3")
     main(writer)
     writer.close()

@@ -236,64 +236,54 @@ def main(writer=None):
     # -------------------------------------------------
 
     splitnn.train()
-    # 注：这里test时只记录了norm方法测试出的泄露auc
     for epoch in range(128):
         epoch_loss = 0
-        epoch_labels = []
-        epoch_g_norm = []
         epoch_outputs = []
+        epoch_labels = []
         for i, data in enumerate(train_loader):
+            for opt in optimizers:
+                # 第一次训练需要清空梯度
+                opt.zero_grad()
+
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
 
-            for opt in splitnn.optimizers:
-                # 第一次训练需要清空梯度
-                opt.zero_grad()
-
-            # # 输出第一个模型的结果
             outputs = splitnn(inputs)
-
-            attack_criterion = nn.BCELoss()
-            loss = attack_criterion(outputs, labels)
-
-            # iso和max_norm使用
-            splitnn.backward(loss)
-            # 对应marvell使用下面
-            # splitnn.backward(loss, labels)
-
+            loss = criterion(outputs, labels)
+            # loss.backward()
+            '''
+            outputs.grad该参数默认情况下是None,但是当第一次为当前张量自身self计算梯度调用backward()方法时,
+            该属性grad将变成一个Tensor张量类型. 该属性将包含计算所得的梯度,在这之后如果再次调用
+            backward()方法,那么将会对这个grad属性进行累加.
+            '''
+            # iso和norm_max保护方法使用：
+            # splitnn.backward(loss)
+            # marvell算法需要传入标签，所以backward修改如下：
+            splitnn.backward(loss, labels)
             epoch_loss += loss.item() / len(train_loader.dataset)
 
-            grad_from_server = splitnn.clients[0].grad_from_next_client
-
-            # 注pow(2)是对每个元素平方
-            # sum是元素相加,dim表示横向相加,也就是128个16维梯度加为128个单维
-            # sqrt开平方，综上表示取模
-            g_norm = grad_from_server.pow(2).sum(dim=1).sqrt()
-            epoch_labels.append(labels)
-            epoch_g_norm.append(g_norm)
             epoch_outputs.append(outputs)
-            
+            epoch_labels.append(labels)
+
+            # 更新对两个模型参数
             for opt in optimizers:
                 opt.step()
-
-        epoch_labels = torch.cat(epoch_labels)
-        epoch_g_norm = torch.cat(epoch_g_norm)
-
-        leak_auc = roc_auc_score(epoch_labels, epoch_g_norm.view(-1, 1))
-        auc = torch_auc(epoch_labels, torch.cat(epoch_outputs))
+        '''
+        sklearn库中提供了auc计算工具，只需提供真实值和预测值即可
+        torch.cat()将不同批次的输出合并到一个tensor中
+        '''
+        auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
 
         if writer:
             writer.add_scalar(
                 "Loss", scalar_value=epoch_loss, global_step=epoch)
             writer.add_scalar("auc", scalar_value=auc, global_step=epoch)
-            writer.add_scalar(
-                "leak_auc", scalar_value=leak_auc, global_step=epoch)
 
         # 下面是添加了测试数据上auc
         test_epoch_outputs = []
         test_epoch_labels = []
-        for i, data in enumerate(test_loader):            
+        for i, data in enumerate(test_loader):
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
@@ -301,12 +291,20 @@ def main(writer=None):
 
             test_epoch_outputs.append(outputs)
             test_epoch_labels.append(labels)
-        test_auc = torch_auc(torch.cat(test_epoch_labels), torch.cat(test_epoch_outputs))
+        test_auc = torch_auc(torch.cat(test_epoch_labels),
+                             torch.cat(test_epoch_outputs))
+
+        # 计算泄露的auc
+        leak_auc = norm_attack(splitnn, train_loader,
+                               attack_criterion=nn.BCELoss(), device=device)
 
         if writer:
             writer.add_scalar(
                 "test_auc", scalar_value=test_auc, global_step=epoch)
-        print(f"epoch={epoch}, loss: {epoch_loss}, auc: {auc}, test_auc:{test_auc}, leak_auc: {leak_auc}")
+            writer.add_scalar(
+                "leak_auc", scalar_value=leak_auc, global_step=epoch)
+        print(
+            f"epoch={epoch}, loss: {epoch_loss}, auc: {auc}, test_auc:{test_auc}, leak_auc: {leak_auc}")
 
     # 注意每次attack也是一次训练!
     # 攻击1：模攻击
