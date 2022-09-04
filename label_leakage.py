@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from torch.utils.data.dataset import Dataset
+from torch.utils.tensorboard import SummaryWriter
 
 from splitLearning import SplitNN, SplitNNClient
 from attack import norm_attack, direction_attack
@@ -90,7 +91,7 @@ def torch_auc(label, pred):
     return roc_auc_score(label.detach().numpy(), pred.detach().numpy())
 
 
-def main():
+def main(writer=None):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device is ", device)
     raw_df = pd.read_csv(
@@ -222,10 +223,13 @@ def main():
     clients = [client_1, client_2]
     splitnn = SplitNN(clients, optimizers)
 
+    # -------------------------------------------------
+    # 至此搭建模型完成，开始训练
+    # -------------------------------------------------
 
+    # 切换到训练模式
     splitnn.train()
-    # 这里只进行3次 测试时只1次
-    for epoch in range(1):
+    for epoch in range(128):
         epoch_loss = 0
         epoch_outputs = []
         epoch_labels = []
@@ -263,13 +267,16 @@ def main():
         print(
             f"epoch={epoch}, loss: {epoch_loss}, auc: {torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))}"
         )
+        if writer:
+            writer.add_scalar("Loss", scalar_value=epoch_loss, global_step=epoch)
+            writer.add_scalar("auc", scalar_value=auc, global_step=epoch)
 
     # 注意每次attack也是一次训练!
     # 攻击1：模攻击
-    train_leak_auc = norm_attack(splitnn, train_loader, attack_criterion = nn.BCELoss(), device=device)
-    print("Leau AUC is ", train_leak_auc)
-    test_leak_auc = norm_attack(splitnn, test_loader, attack_criterion = nn.BCELoss(), device=device)
-    print("Leau AUC is ", test_leak_auc)
+    # train_leak_auc = norm_attack(splitnn, train_loader, attack_criterion = nn.BCELoss(), device=device)
+    # print("Leau AUC is ", train_leak_auc)
+    # test_leak_auc = norm_attack(splitnn, test_loader, attack_criterion = nn.BCELoss(), device=device)
+    # print("Leau AUC is ", test_leak_auc)
 
     # 攻击2：余弦攻击
     # train_leak_auc = direction_attack(splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
@@ -278,6 +285,8 @@ def main():
     # print("Leau AUC is ", test_leak_auc)
 
 if __name__ == "__main__":
-    main()
+    writer = SummaryWriter("efficiency")
+    main(writer)
+    writer.close()
 
-# 接下来的目标 把 NumpyDataset 搞定，开始读主要框架
+
