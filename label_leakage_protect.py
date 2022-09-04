@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from torch.utils.data.dataset import Dataset
+from torch.utils.tensorboard import SummaryWriter
 
 from splitLearning import SplitNN, SplitNNClient, ISO_SplitNN, MAX_NORM_SplitNN, Marvell_SplitNN
 from attack import norm_attack, direction_attack
@@ -55,9 +56,6 @@ class NumpyDataset(Dataset):
         return len(self.x)
 
 
-
-
-
 config = {"batch_size": 128}
 
 # 输入貌似只有28个维度 线性层输入后有16个隐藏层
@@ -90,7 +88,7 @@ def torch_auc(label, pred):
     return roc_auc_score(label.detach().numpy(), pred.detach().numpy())
 
 
-def main():
+def main(writer=None):
     device = "cpu"
     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device is ", device)
@@ -167,7 +165,6 @@ def main():
     val_features = np.clip(val_features, -5, 5)
     test_features = np.clip(test_features, -5, 5)
 
-
     print("Training labels shape:", train_labels.shape)
     print("Validation labels shape:", val_labels.shape)
     print("Test labels shape:", test_labels.shape)
@@ -219,7 +216,6 @@ def main():
     client_1 = SplitNNClient(model_1, user_id=0)
     client_2 = SplitNNClient(model_2, user_id=0)
 
-
     clients = [client_1, client_2]
 
     # 不进行保护
@@ -227,7 +223,7 @@ def main():
 
     # 保护方法1 iso 高斯白噪声
     # t 表示高斯噪声的强度
-    splitnn = ISO_SplitNN(clients, optimizers, t = 0.005)
+    splitnn = ISO_SplitNN(clients, optimizers, t=0.005)
 
     # 保护方法2 max_norm
     # splitnn = MAX_NORM_SplitNN(clients, optimizers)
@@ -235,10 +231,12 @@ def main():
     # 保护方法3 Marvell
     # splitnn = Marvell_SplitNN(clients, optimizers)
 
+    # -------------------------------------------------
+    # 至此搭建模型完成，开始训练
+    # -------------------------------------------------
 
     splitnn.train()
-    # 这里只进行3次 测试时只2次
-    for epoch in range(2):
+    for epoch in range(64):
         epoch_loss = 0
         epoch_outputs = []
         epoch_labels = []
@@ -275,15 +273,38 @@ def main():
         sklearn库中提供了auc计算工具，只需提供真实值和预测值即可
         torch.cat()将不同批次的输出合并到一个tensor中
         '''
+        auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
         print(
-            f"epoch={epoch}, loss: {epoch_loss}, auc: {torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))}"
+            f"epoch={epoch}, loss: {epoch_loss}, auc: {auc}"
         )
+        if writer:
+            writer.add_scalar(
+                "Loss", scalar_value=epoch_loss, global_step=epoch)
+            writer.add_scalar("auc", scalar_value=auc, global_step=epoch)
+
+        # 下面是添加了测试数据上auc
+        for i, data in enumerate(test_loader):
+            inputs, labels = data
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            outputs = splitnn(inputs)
+
+            epoch_outputs.append(outputs)
+            epoch_labels.append(labels)
+        test_auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
+
+        if writer:
+            writer.add_scalar(
+                "test_auc", scalar_value=test_auc, global_step=epoch)
+
 
     # 注意每次attack也是一次训练!
     # 攻击1：模攻击
-    train_leak_auc = norm_attack(splitnn, train_loader, attack_criterion = nn.BCELoss(), device=device)
+    train_leak_auc = norm_attack(
+        splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
     print("Leau AUC is ", train_leak_auc)
-    test_leak_auc = norm_attack(splitnn, test_loader, attack_criterion = nn.BCELoss(), device=device)
+    test_leak_auc = norm_attack(
+        splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
     print("Leau AUC is ", test_leak_auc)
 
     # 攻击2：余弦攻击
@@ -292,7 +313,8 @@ def main():
     # test_leak_auc = direction_attack(splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
     # print("Leau AUC is ", test_leak_auc)
 
-if __name__ == "__main__":
-    main()
 
-# 接下来的目标 把 NumpyDataset 搞定，开始读主要框架
+if __name__ == "__main__":
+    writer = SummaryWriter("iso-protect")
+    main(writer)
+    writer.close()

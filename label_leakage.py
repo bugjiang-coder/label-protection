@@ -56,9 +56,6 @@ class NumpyDataset(Dataset):
         return len(self.x)
 
 
-
-
-
 config = {"batch_size": 128}
 
 # 输入貌似只有28个维度 线性层输入后有16个隐藏层
@@ -167,7 +164,6 @@ def main(writer=None):
     val_features = np.clip(val_features, -5, 5)
     test_features = np.clip(test_features, -5, 5)
 
-
     print("Training labels shape:", train_labels.shape)
     print("Validation labels shape:", val_labels.shape)
     print("Test labels shape:", test_labels.shape)
@@ -269,9 +265,10 @@ def main(writer=None):
             f"epoch={epoch}, loss: {epoch_loss}, auc: {auc}"
         )
         if writer:
-            writer.add_scalar("Loss", scalar_value=epoch_loss, global_step=epoch)
+            writer.add_scalar(
+                "Loss", scalar_value=epoch_loss, global_step=epoch)
             writer.add_scalar("auc", scalar_value=auc, global_step=epoch)
-        
+
         # 下面是添加了测试数据上auc
         for i, data in enumerate(test_loader):
             inputs, labels = data
@@ -284,7 +281,8 @@ def main(writer=None):
         test_auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
 
         if writer:
-            writer.add_scalar("test_auc", scalar_value=test_auc, global_step=epoch)
+            writer.add_scalar(
+                "test_auc", scalar_value=test_auc, global_step=epoch)
 
     # 注意每次attack也是一次训练!
     # 攻击1：模攻击
@@ -299,9 +297,8 @@ def main(writer=None):
     # test_leak_auc = direction_attack(splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
     # print("Leau AUC is ", test_leak_auc)
 
+
 if __name__ == "__main__":
     writer = SummaryWriter("efficiency2")
     main(writer)
     writer.close()
-
-
