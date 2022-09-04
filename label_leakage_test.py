@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data.dataset import Dataset
 from torch.utils.tensorboard import SummaryWriter
 
-from splitLearning import SplitNN, SplitNNClient, ISO_SplitNN, MAX_NORM_SplitNN, Marvell_SplitNN
+from splitLearning import SplitNN, SplitNNClient
 from attack import norm_attack, direction_attack
 
 
@@ -89,8 +89,7 @@ def torch_auc(label, pred):
 
 
 def main(writer=None):
-    device = "cpu"
-    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device is ", device)
     raw_df = pd.read_csv(
         "creditcard.csv"
@@ -143,7 +142,16 @@ def main(writer=None):
     # StandardScaler类是一个用来将数据进行归一化和标准化的类。
     scaler = StandardScaler()
     # 使得新的X数据集方差为1，均值为0
-
+    '''
+    fit_transform方法是fit和transform的结合，
+    fit_transform(X_train) 意思是找出X_train的和，并应用在X_train上。
+    即fit_transform(partData)对部分数据先拟合fit，
+    找到该part的整体指标，如均值、方差、最大值最小值等等（根据具体转换的目的），
+    然后对该partData进行转换transform，从而实现数据的标准化、归一化等等。
+    fit_transform方法是fit和transform的结合，fit_transform(X_train) 意思是找出X_train的均值和标准差，并应用在X_train上。
+    这时对于X_test，我们就可以直接使用transform方法。
+    因为此时StandardScaler已经保存了X_train的均值和标准差
+    '''
     train_features = scaler.fit_transform(train_features)
     # 根据训练集的数据，将剩下的数据进行标准化，所有的数据标准化是一致的
     val_features = scaler.transform(val_features)
@@ -207,25 +215,15 @@ def main(writer=None):
     client_1 = SplitNNClient(model_1, user_id=0)
     client_2 = SplitNNClient(model_2, user_id=0)
 
+    # 下面就比较难了
     clients = [client_1, client_2]
-
-    # 不进行保护
-    # splitnn = SplitNN(clients, optimizers)
-
-    # 保护方法1 iso 高斯白噪声
-    # t 表示高斯噪声的强度
-    splitnn = ISO_SplitNN(clients, optimizers, t=0.005)
-
-    # 保护方法2 max_norm
-    # splitnn = MAX_NORM_SplitNN(clients, optimizers)
-
-    # 保护方法3 Marvell
-    # splitnn = Marvell_SplitNN(clients, optimizers)
+    splitnn = SplitNN(clients, optimizers)
 
     # -------------------------------------------------
     # 至此搭建模型完成，开始训练
     # -------------------------------------------------
 
+    # 切换到训练模式
     splitnn.train()
     for epoch in range(128):
         epoch_loss = 0
@@ -243,12 +241,13 @@ def main(writer=None):
             outputs = splitnn(inputs)
             loss = criterion(outputs, labels)
             # loss.backward()
+            '''
+            outputs.grad该参数默认情况下是None,但是当第一次为当前张量自身self计算梯度调用backward()方法时,
+            该属性grad将变成一个Tensor张量类型. 该属性将包含计算所得的梯度,在这之后如果再次调用
+            backward()方法,那么将会对这个grad属性进行累加.
+            '''
 
-            # iso和norm_max保护方法使用：
             splitnn.backward(loss)
-            # marvell算法需要传入标签，所以backward修改如下：
-            # splitnn.backward(loss, labels)
-
             epoch_loss += loss.item() / len(train_loader.dataset)
 
             epoch_outputs.append(outputs)
@@ -257,30 +256,49 @@ def main(writer=None):
             # 更新对两个模型参数
             for opt in optimizers:
                 opt.step()
-
+        '''
+        sklearn库中提供了auc计算工具，只需提供真实值和预测值即可
+        torch.cat()将不同批次的输出合并到一个tensor中
+        '''
+        auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
         print(
-            f"epoch={epoch}, loss: {epoch_loss}, auc: {torch.cat(epoch_labels), torch.cat(epoch_outputs)}"
+            f"epoch={epoch}, loss: {epoch_loss}, auc: {auc}"
         )
+        if writer:
+            writer.add_scalar(
+                "Loss", scalar_value=epoch_loss, global_step=epoch)
+            writer.add_scalar("auc", scalar_value=auc, global_step=epoch)
+
+        # 下面是添加了测试数据上auc
+        for i, data in enumerate(test_loader):
+            inputs, labels = data
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            outputs = splitnn(inputs)
+
+            epoch_outputs.append(outputs)
+            epoch_labels.append(labels)
+        test_auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
+
+        if writer:
+            writer.add_scalar(
+                "test_auc", scalar_value=test_auc, global_step=epoch)
 
     # 注意每次attack也是一次训练!
     # 攻击1：模攻击
-    train_leak_auc = norm_attack(
-        splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau train_leak_auc is ", train_leak_auc)
-    test_leak_auc = norm_attack(
-        splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau test_leak_auc is ", test_leak_auc)
+    # train_leak_auc = norm_attack(splitnn, train_loader, attack_criterion = nn.BCELoss(), device=device)
+    # print("Leau AUC is ", train_leak_auc)
+    # test_leak_auc = norm_attack(splitnn, test_loader, attack_criterion = nn.BCELoss(), device=device)
+    # print("Leau AUC is ", test_leak_auc)
 
     # 攻击2：余弦攻击
-    train_leak_auc = direction_attack(
-        splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau train_leak_auc is ", train_leak_auc)
-    test_leak_auc = direction_attack(
-        splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau test_leak_auc is ", test_leak_auc)
+    # train_leak_auc = direction_attack(splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
+    # print("Leau AUC is ", train_leak_auc)
+    # test_leak_auc = direction_attack(splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
+    # print("Leau AUC is ", test_leak_auc)
 
 
 if __name__ == "__main__":
-    writer = SummaryWriter("iso-protect")
+    writer = SummaryWriter("efficiency2")
     main(writer)
     writer.close()

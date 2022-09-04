@@ -143,7 +143,16 @@ def main(writer=None):
     # StandardScaler类是一个用来将数据进行归一化和标准化的类。
     scaler = StandardScaler()
     # 使得新的X数据集方差为1，均值为0
-
+    '''
+    fit_transform方法是fit和transform的结合，
+    fit_transform(X_train) 意思是找出X_train的和，并应用在X_train上。
+    即fit_transform(partData)对部分数据先拟合fit，
+    找到该part的整体指标，如均值、方差、最大值最小值等等（根据具体转换的目的），
+    然后对该partData进行转换transform，从而实现数据的标准化、归一化等等。
+    fit_transform方法是fit和transform的结合，fit_transform(X_train) 意思是找出X_train的均值和标准差，并应用在X_train上。
+    这时对于X_test，我们就可以直接使用transform方法。
+    因为此时StandardScaler已经保存了X_train的均值和标准差
+    '''
     train_features = scaler.fit_transform(train_features)
     # 根据训练集的数据，将剩下的数据进行标准化，所有的数据标准化是一致的
     val_features = scaler.transform(val_features)
@@ -227,57 +236,85 @@ def main(writer=None):
     # -------------------------------------------------
 
     splitnn.train()
+    # 注：这里test时只记录了norm方法测试出的泄露auc
     for epoch in range(128):
-        epoch_loss = 0
-        epoch_outputs = []
         epoch_labels = []
-        for i, data in enumerate(train_loader):
-            for opt in optimizers:
-                # 第一次训练需要清空梯度
-                opt.zero_grad()
-
+        epoch_g_norm = []
+        epoch_outputs = []
+        for i, data in enumerate(train_loader, 0):
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
 
-            outputs = splitnn(inputs)
-            loss = criterion(outputs, labels)
-            # loss.backward()
+            for opt in splitnn.optimizers:
+                # 第一次训练需要清空梯度
+                opt.zero_grad()
 
-            # iso和norm_max保护方法使用：
+            # # 输出第一个模型的结果
+            outputs = splitnn(inputs)
+
+            attack_criterion = nn.BCELoss()
+            loss = attack_criterion(outputs, labels)
+
+            # iso和max_norm使用
             splitnn.backward(loss)
-            # marvell算法需要传入标签，所以backward修改如下：
+            # 对应marvell使用下面
             # splitnn.backward(loss, labels)
 
             epoch_loss += loss.item() / len(train_loader.dataset)
 
+            grad_from_server = splitnn.clients[0].grad_from_next_client
+
+            # 注pow(2)是对每个元素平方
+            # sum是元素相加,dim表示横向相加,也就是128个16维梯度加为128个单维
+            # sqrt开平方，综上表示取模
+            g_norm = grad_from_server.pow(2).sum(dim=1).sqrt()
+            epoch_labels.append(labels)
+            epoch_g_norm.append(g_norm)
+            epoch_outputs.append(outputs)
+
+        epoch_labels = torch.cat(epoch_labels)
+        epoch_g_norm = torch.cat(epoch_g_norm)
+
+        leak_auc = roc_auc_score(epoch_labels, epoch_g_norm.view(-1, 1))
+        auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
+
+        if writer:
+            writer.add_scalar(
+                "Loss", scalar_value=epoch_loss, global_step=epoch)
+            writer.add_scalar("auc", scalar_value=auc, global_step=epoch)
+            writer.add_scalar(
+                "leak_auc", scalar_value=leak_auc, global_step=epoch)
+
+        # 下面是添加了测试数据上auc
+        for i, data in enumerate(test_loader):
+            inputs, labels = data
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            outputs = splitnn(inputs)
+
             epoch_outputs.append(outputs)
             epoch_labels.append(labels)
+        test_auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
 
-            # 更新对两个模型参数
-            for opt in optimizers:
-                opt.step()
-
-        print(
-            f"epoch={epoch}, loss: {epoch_loss}, auc: {torch.cat(epoch_labels), torch.cat(epoch_outputs)}"
-        )
+        if writer:
+            writer.add_scalar(
+                "test_auc", scalar_value=test_auc, global_step=epoch)
 
     # 注意每次attack也是一次训练!
     # 攻击1：模攻击
-    train_leak_auc = norm_attack(
-        splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau train_leak_auc is ", train_leak_auc)
-    test_leak_auc = norm_attack(
-        splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau test_leak_auc is ", test_leak_auc)
+    # train_leak_auc = norm_attack(
+    #     splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
+    # print("Leau AUC is ", train_leak_auc)
+    # test_leak_auc = norm_attack(
+    #     splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
+    # print("Leau AUC is ", test_leak_auc)
 
     # 攻击2：余弦攻击
-    train_leak_auc = direction_attack(
-        splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau train_leak_auc is ", train_leak_auc)
-    test_leak_auc = direction_attack(
-        splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau test_leak_auc is ", test_leak_auc)
+    # train_leak_auc = direction_attack(splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
+    # print("Leau AUC is ", train_leak_auc)
+    # test_leak_auc = direction_attack(splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
+    # print("Leau AUC is ", test_leak_auc)
 
 
 if __name__ == "__main__":
