@@ -264,12 +264,27 @@ def main(writer=None):
         sklearn库中提供了auc计算工具，只需提供真实值和预测值即可
         torch.cat()将不同批次的输出合并到一个tensor中
         '''
+        auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
         print(
-            f"epoch={epoch}, loss: {epoch_loss}, auc: {torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))}"
+            f"epoch={epoch}, loss: {epoch_loss}, auc: {auc}"
         )
         if writer:
             writer.add_scalar("Loss", scalar_value=epoch_loss, global_step=epoch)
             writer.add_scalar("auc", scalar_value=auc, global_step=epoch)
+        
+        # 下面是添加了测试数据上auc
+        for i, data in enumerate(test_loader):
+            inputs, labels = data
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            outputs = splitnn(inputs)
+
+            epoch_outputs.append(outputs)
+            epoch_labels.append(labels)
+        test_auc = torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))
+
+        if writer:
+            writer.add_scalar("test_auc", scalar_value=test_auc, global_step=epoch)
 
     # 注意每次attack也是一次训练!
     # 攻击1：模攻击
@@ -285,7 +300,7 @@ def main(writer=None):
     # print("Leau AUC is ", test_leak_auc)
 
 if __name__ == "__main__":
-    writer = SummaryWriter("efficiency")
+    writer = SummaryWriter("efficiency2")
     main(writer)
     writer.close()
 
