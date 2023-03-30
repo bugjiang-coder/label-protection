@@ -35,7 +35,7 @@ def norm_attack(splitnn, dataloader, attack_criterion, device="cpu"):
     epoch_labels = torch.cat(epoch_labels)
     epoch_g_norm = torch.cat(epoch_g_norm)
 
-    score = roc_auc_score(epoch_labels, epoch_g_norm.view(-1, 1))
+    score = roc_auc_score(epoch_labels.cpu(), epoch_g_norm.cpu().view(-1, 1))
     return score
 
 
@@ -55,7 +55,11 @@ def direction_attack(splitnn, dataloader, attack_criterion, device="cpu"):
         outputs = splitnn(inputs)
         # print(outputs.shape)
         loss = attack_criterion(outputs, labels)
+
+        # iso和max_norm使用
         splitnn.backward(loss)
+        # 对应marvell使用下面
+        # splitnn.backward(loss, labels)
 
         grad_from_server = splitnn.clients[0].grad_from_next_client
 
@@ -85,5 +89,5 @@ def direction_attack(splitnn, dataloader, attack_criterion, device="cpu"):
     epoch_labels = torch.cat(epoch_labels)
     epoch_g_direc = torch.cat(epoch_g_direc)
 
-    score = roc_auc_score(epoch_labels, epoch_g_direc.view(-1, 1))
+    score = roc_auc_score(epoch_labels.cpu(), epoch_g_direc.cpu().view(-1, 1))
     return score

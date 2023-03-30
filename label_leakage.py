@@ -56,7 +56,7 @@ class NumpyDataset(Dataset):
         return len(self.x)
 
 
-config = {"batch_size": 128}
+config = {"batch_size": 256}
 
 # 输入貌似只有28个维度 线性层输入后有16个隐藏层
 hidden_dim = 16
@@ -85,14 +85,14 @@ class SecondNet(nn.Module):
 
 
 def torch_auc(label, pred):
-    return roc_auc_score(label.detach().numpy(), pred.detach().numpy())
+    return roc_auc_score(label.detach().cpu().numpy(), pred.detach().cpu().numpy())
 
 
 def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device is ", device)
     raw_df = pd.read_csv(
-        "creditcard.csv"
+        "mini_creditcard.csv"
     )
     # 将读入的数据分成两类
     raw_df_neg = raw_df[raw_df["Class"] == 0]
@@ -215,7 +215,7 @@ def main():
 
     # 切换到训练模式
     splitnn.train()
-    for epoch in range(128):
+    for epoch in range(32):
         epoch_loss = 0
         epoch_outputs = []
         epoch_labels = []
@@ -242,25 +242,24 @@ def main():
                 opt.step()
 
         print(
-            f"epoch={epoch}, loss: {epoch_loss}, auc: {torch.cat(epoch_labels), torch.cat(epoch_outputs)}"
+            f"epoch={epoch}, loss: {epoch_loss}, auc: {torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))}"
         )
 
-    # 注意每次attack也是一次训练!
     # 攻击1：模攻击
     train_leak_auc = norm_attack(
         splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau train_leak_auc is ", train_leak_auc)
+    print("norm_attack: train_leak_auc is ", train_leak_auc)
     test_leak_auc = norm_attack(
         splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau test_leak_auc is ", test_leak_auc)
+    print("norm_attack: test_leak_auc is ", test_leak_auc)
 
     # 攻击2：余弦攻击
     train_leak_auc = direction_attack(
         splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau train_leak_auc is ", train_leak_auc)
+    print("direction_attack: train_leak_auc is ", train_leak_auc)
     test_leak_auc = direction_attack(
         splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau test_leak_auc is ", test_leak_auc)
+    print("direction_attack: test_leak_auc is ", test_leak_auc)
 
 
 if __name__ == "__main__":

@@ -90,6 +90,7 @@ def torch_auc(label, pred):
 
 def main(writer=None):
     device = "cpu"
+    # GPU代码没有改好，就cpu上跑吧
     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device is ", device)
     raw_df = pd.read_csv(
@@ -259,28 +260,29 @@ def main(writer=None):
                 opt.step()
 
         print(
-            f"epoch={epoch}, loss: {epoch_loss}, auc: {torch.cat(epoch_labels), torch.cat(epoch_outputs)}"
+            f"epoch={epoch}, loss: {epoch_loss}, auc: {torch_auc(torch.cat(epoch_labels), torch.cat(epoch_outputs))}"
         )
 
-    # 注意每次attack也是一次训练!差别只是更不更新参数
     # 攻击1：模攻击
     train_leak_auc = norm_attack(
         splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau train_leak_auc is ", train_leak_auc)
+    print("norm_attack: train_leak_auc is ", train_leak_auc)
     test_leak_auc = norm_attack(
         splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau test_leak_auc is ", test_leak_auc)
+    print("norm_attack: test_leak_auc is ", test_leak_auc)
 
     # 攻击2：余弦攻击
     train_leak_auc = direction_attack(
         splitnn, train_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau train_leak_auc is ", train_leak_auc)
+    print("direction_attack: train_leak_auc is ", train_leak_auc)
     test_leak_auc = direction_attack(
         splitnn, test_loader, attack_criterion=nn.BCELoss(), device=device)
-    print("Leau test_leak_auc is ", test_leak_auc)
+    print("direction_attack: test_leak_auc is ", test_leak_auc)
+
 
 
 if __name__ == "__main__":
-    writer = SummaryWriter("iso-protect")
-    main(writer)
-    writer.close()
+    # writer = SummaryWriter("iso-protect")
+    # main(writer)
+    # writer.close()
+    main()
